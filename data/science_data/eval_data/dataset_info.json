@@ -1,0 +1,50 @@
+{
+  "builder_name": "json",
+  "citation": "",
+  "config_name": "Chemistry",
+  "dataset_name": "sci_know_eval",
+  "dataset_size": 16397429,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/hicai-zju/SciKnowEval@3284f6fbf3b8063ab8a0408a65fb00157dbdc9fa/data/Chemistry/sciknoweval_chemistry_test.jsonl": {
+      "num_bytes": 19753500,
+      "checksum": null
+    }
+  },
+  "download_size": 19753500,
+  "features": {
+    "prompt": [
+      {
+        "content": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "role": {
+          "dtype": "string",
+          "_type": "Value"
+        }
+      }
+    ],
+    "answer": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 36150929,
+  "splits": {
+    "test": {
+      "name": "test",
+      "num_bytes": 16397429,
+      "num_examples": 20640,
+      "dataset_name": "sci_know_eval"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
