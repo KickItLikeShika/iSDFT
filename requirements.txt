@@ -12,6 +12,7 @@ numpy==2.2.6
 scipy==1.15.3
 matplotlib==3.10.7
 flashinfer-python==0.5.3
-wandb==0.22.2
+wandb==0.27.0
 pandas==2.3.3
 deepspeed==0.18.4
+lm_eval[ifeval] @ git+https://github.com/EleutherAI/lm-evaluation-harness@03c44adc0586f88bb343a74da1a1c602103536dd
