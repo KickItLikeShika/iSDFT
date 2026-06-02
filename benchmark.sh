@@ -5,6 +5,7 @@ MODEL_ARG=${1:?"usage: $0 <checkpoint_dir|hf_repo_id> [output_dir]"}
 DTYPE=${DTYPE:-float32}
 BATCH_SIZE=${BATCH_SIZE:-auto}
 TASKS=${TASKS:-hellaswag,mmlu,truthfulqa,winogrande,humaneval,ifeval}
+GEN_KWARGS=${GEN_KWARGS:-max_gen_toks=2048}
 
 if [[ -d "${MODEL_ARG}" ]]; then
     CHECKPOINT="$(cd "${MODEL_ARG}" && pwd)"
@@ -45,6 +46,7 @@ RUN_INFO="${OUT_DIR}/run_info.txt"
     echo "dtype: ${DTYPE}"
     echo "batch_size: ${BATCH_SIZE}"
     echo "tasks: ${TASKS}"
+    echo "gen_kwargs: ${GEN_KWARGS}"
 } | tee "${RUN_INFO}"
 
 echo ">>> ${RUN_INFO}"
@@ -56,6 +58,7 @@ lm_eval \
     --model hf \
     --model_args "pretrained=${CHECKPOINT},dtype=${DTYPE},trust_remote_code=True" \
     --tasks "${TASKS}" \
+    --gen_kwargs "${GEN_KWARGS}" \
     --batch_size "${BATCH_SIZE}" \
     --output_path "${OUT_DIR}" \
     --confirm_run_unsafe_code \
