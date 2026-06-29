@@ -12,10 +12,37 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Distil Trainer")
     parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
     parser.add_argument("--num_train_epochs", type=int, default=1, help="Number of training epochs")
+    parser.add_argument("--max_steps", type=int, default=-1, help="If > 0, stop training after this many optimizer steps.")
     parser.add_argument("--num_prompts_per_batch", type=int, default=32, help="Number of prompts per batch")
     parser.add_argument("--ref_model_mixup_alpha", type=float, default=0.01, help="Reference model mixup alpha")
-    parser.add_argument("--rho", type=float, default=1.0, help="Info-Proximal SDFT: fraction of teacher info to transfer. rho=1.0 = vanilla SDFT.")
-    parser.add_argument("--rho_bisection_iters", type=int, default=20, help="Bisection iterations for solving lambda in q*.")
+    parser.add_argument("--rho", type=float, default=1.0, help="Info-Proximal SDFT ρ (1.0=vanilla SDFT; >1 enables overdrive via extended λ).")
+    parser.add_argument(
+        "--rho_schedule",
+        type=str,
+        default=None,
+        choices=["linear", "ramp50", "piecewise_50_50"],
+        help="ρ schedule: linear (rho_min→rho over rho_ramp_steps) or legacy ramp50.",
+    )
+    parser.add_argument(
+        "--rho_min",
+        type=float,
+        default=0.25,
+        help="For --rho_schedule linear: ρ at step 0 (default 0.25).",
+    )
+    parser.add_argument(
+        "--rho_ramp_steps",
+        type=int,
+        default=150,
+        help="For --rho_schedule linear: step when ρ reaches --rho (default 200).",
+    )
+    parser.add_argument("--rho_bisection_iters", type=int, default=40, help="Bisection iterations for solving lambda in q*.")
+    parser.add_argument("--rho_lambda_max", type=float, default=5.0, help="Max λ for extended q* (ρ>1 overdrive).")
+    parser.add_argument(
+        "--anchor_mu",
+        type=float,
+        default=2e-3,
+        help="Weight on KL(p_base||p) with frozen initial weights. 0=off. Try 1e-3, 1e-2, 0.05.",
+    )
     parser.add_argument("--output_dir", type=str, help="Output directory")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Model name")
     parser.add_argument("--dataset_name", type=str, default="tooluse", help="Dataset name", choices=["tooluse", "science"])
@@ -91,6 +118,12 @@ if __name__ == "__main__":
         args.model_name,
         torch_dtype=torch.bfloat16,
     )
+    base_model = None
+    if args.anchor_mu > 0.0:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            torch_dtype=torch.bfloat16,
+        )
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if args.dataset_name == "tooluse":
         dataset, _ = load_tooluse_dataset(args.seed)
@@ -117,6 +150,7 @@ if __name__ == "__main__":
         max_prompt_length = 1024,
         max_completion_length = 1024,
         num_train_epochs = args.num_train_epochs,
+        max_steps = args.max_steps,
         num_iterations = 1,
         num_generations = 1,
         save_steps = 100,
@@ -130,11 +164,17 @@ if __name__ == "__main__":
         vllm_importance_sampling_correction = True,
         num_loss_tokens_to_skip = 3,
         rho = args.rho,
+        rho_schedule = args.rho_schedule,
+        rho_min = args.rho_min,
+        rho_ramp_steps = args.rho_ramp_steps,
         rho_bisection_iters = args.rho_bisection_iters,
+        rho_lambda_max = args.rho_lambda_max,
+        anchor_mu = args.anchor_mu,
     )
     trainer = DistilTrainer(
         model=model,
         ref_model=teacher_model,
+        base_model=base_model,
         args=config,
         train_dataset=dataset,
         processing_class=tokenizer,
