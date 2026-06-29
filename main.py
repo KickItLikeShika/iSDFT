@@ -15,7 +15,7 @@ def parse_args():
     parser.add_argument("--max_steps", type=int, default=-1, help="If > 0, stop training after this many optimizer steps.")
     parser.add_argument("--num_prompts_per_batch", type=int, default=32, help="Number of prompts per batch")
     parser.add_argument("--ref_model_mixup_alpha", type=float, default=0.01, help="Reference model mixup alpha")
-    parser.add_argument("--rho", type=float, default=1.0, help="Info-Proximal SDFT ρ (1.0=vanilla SDFT; >1 enables overdrive via extended λ).")
+    parser.add_argument("--rho", type=float, default=1.0, help="Info-Proximal SDFT ρ (1.0=vanilla SDFT).")
     parser.add_argument(
         "--rho_schedule",
         type=str,
@@ -36,7 +36,6 @@ def parse_args():
         help="For --rho_schedule linear: step when ρ reaches --rho (default 200).",
     )
     parser.add_argument("--rho_bisection_iters", type=int, default=40, help="Bisection iterations for solving lambda in q*.")
-    parser.add_argument("--rho_lambda_max", type=float, default=5.0, help="Max λ for extended q* (ρ>1 overdrive).")
     parser.add_argument(
         "--anchor_mu",
         type=float,
@@ -168,7 +167,6 @@ if __name__ == "__main__":
         rho_min = args.rho_min,
         rho_ramp_steps = args.rho_ramp_steps,
         rho_bisection_iters = args.rho_bisection_iters,
-        rho_lambda_max = args.rho_lambda_max,
         anchor_mu = args.anchor_mu,
     )
     trainer = DistilTrainer(

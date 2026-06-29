@@ -1,7 +1,11 @@
 import torch
 import torch.nn.functional as F
 
-from distil_trainer import compute_q_star_logps
+from distil_trainer import (
+    build_q_star_logps,
+    compute_q_star_logps,
+    resolve_scheduled_rho,
+)
 
 
 def _random_logps(batch, seqlen, vocab, seed=0, scale=1.0):
@@ -12,6 +16,29 @@ def _random_logps(batch, seqlen, vocab, seed=0, scale=1.0):
 
 def _kl(log_a, log_b):
     return (log_a.exp() * (log_a - log_b)).sum(-1)
+
+
+def test_rho_linear_schedule():
+    kw = dict(fallback_rho=1.0, rho_min=0.25, rho_ramp_steps=200)
+    assert resolve_scheduled_rho(0, "linear", **kw) == 0.25
+    assert resolve_scheduled_rho(100, "linear", **kw) == 0.625
+    assert resolve_scheduled_rho(200, "linear", **kw) == 1.0
+    assert resolve_scheduled_rho(500, "linear", **kw) == 1.0
+    step_inc = resolve_scheduled_rho(1, "linear", **kw) - resolve_scheduled_rho(0, "linear", **kw)
+    assert abs(step_inc - (1.0 - 0.25) / 200) < 1e-9
+
+
+def test_rho_ramp50_schedule():
+    for step, expected in [
+        (0, 0.5),
+        (49, 0.5),
+        (50, 0.75),
+        (99, 0.75),
+        (100, 1.0),
+        (500, 1.0),
+    ]:
+        got = resolve_scheduled_rho(step, "ramp50", fallback_rho=1.0)
+        assert got == expected, f"step {step}: expected {expected}, got {got}"
 
 
 def test_rho_one_recovers_teacher():
@@ -53,3 +80,12 @@ def test_kl_qstar_less_than_kl_T():
         # should hold per-token,  with a small numerical difference
         assert (kl_q_p <= kl_T_p + 1e-4).all(), \
             f"rho={rho}: KL(q*||p) exceeds KL(T||p)"
+
+
+def test_build_q_star_uses_standard_solver_for_rho_le_one():
+    log_p = _random_logps(2, 4, 128, seed=0)
+    log_T = _random_logps(2, 4, 128, seed=1, scale=2.0)
+    for rho in [0.5, 0.75, 1.0]:
+        routed, _, _, _ = build_q_star_logps(log_p, log_T, rho=rho, n_iter=40)
+        base, _, _, _ = compute_q_star_logps(log_p, log_T, rho=rho, n_iter=40)
+        assert torch.allclose(routed, base, atol=1e-4), f"rho={rho}: build_q_star should use standard solver"

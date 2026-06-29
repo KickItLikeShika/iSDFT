@@ -142,6 +142,41 @@ def compute_q_star_logps(log_p, log_T, rho, n_iter=20):
     return log_q_star, lam.squeeze(-1), gamma.squeeze(-1), kl_T_p
 
 
+def resolve_scheduled_rho(
+    global_step: int,
+    schedule: str,
+    fallback_rho: float = 1.0,
+    rho_min: float = 0.25,
+    rho_ramp_steps: int = 200,
+) -> float:
+    """ρ from optimizer step index (HuggingFace ``state.global_step``).
+
+    ``linear``: ρ increases linearly from ``rho_min`` at step 0 to ``fallback_rho`` at
+    ``rho_ramp_steps``, then stays at ``fallback_rho``.
+
+    ``ramp50`` (legacy): ρ=0.5 for steps 0–49, 0.75 for 50–99, then ``fallback_rho``.
+    """
+    if schedule == "linear":
+        if rho_ramp_steps <= 0 or global_step >= rho_ramp_steps:
+            return fallback_rho
+        frac = global_step / rho_ramp_steps
+        return rho_min + (fallback_rho - rho_min) * frac
+    if schedule in ("ramp50", "piecewise_50_50"):
+        if global_step < 50:
+            return 0.5
+        if global_step < 100:
+            return 0.75
+        return fallback_rho
+    raise ValueError(
+        f"Unknown rho_schedule={schedule!r}. Supported: linear, ramp50, piecewise_50_50."
+    )
+
+@torch.no_grad()
+def build_q_star_logps(log_p, log_T, rho, n_iter=20):
+    """Build q* using the standard λ in [0,1] solver"""
+    return compute_q_star_logps(log_p, log_T, rho, n_iter=n_iter)
+
+
 class MemoryEfficientSyncRefModelCallback(TrainerCallback):
     """
     Memory-efficient callback to synchronize the model with a reference model.
@@ -312,6 +347,7 @@ class DistilTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        base_model: Optional[PreTrainedModel] = None,
     ):
         # Args
         if args is None:
@@ -400,7 +436,17 @@ class DistilTrainer(BaseTrainer):
         self.top_entropy_quantile = args.top_entropy_quantile
         self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
         self.rho = args.rho
+        self.rho_schedule = args.rho_schedule
+        self.rho_min = args.rho_min
+        self.rho_ramp_steps = args.rho_ramp_steps
         self.rho_bisection_iters = args.rho_bisection_iters
+        self.anchor_mu = args.anchor_mu
+        self.base_model = base_model
+        if self.anchor_mu > 0.0 and self.base_model is None:
+            raise ValueError(
+                "anchor_mu > 0 requires `base_model` (frozen initial checkpoint). "
+                "Pass a separate `AutoModelForCausalLM` loaded from the same weights as at step 0."
+            )
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -609,6 +655,16 @@ class DistilTrainer(BaseTrainer):
                 self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+        if self.base_model is not None:
+            if args.disable_dropout:
+                disable_dropout_in_model(self.base_model)
+            if self.is_deepspeed_enabled:
+                self.base_model = prepare_deepspeed(self.base_model, self.accelerator)
+            elif self.is_fsdp_enabled:
+                self.base_model = prepare_fsdp(self.base_model, self.accelerator)
+            else:
+                self.base_model = self.accelerator.prepare_model(self.base_model, evaluation_mode=True)
 
         if args.sync_ref_model:
             self.add_callback(MemoryEfficientSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
@@ -1643,6 +1699,18 @@ class DistilTrainer(BaseTrainer):
             raise ValueError("The DistilTrainer does not support returning outputs")
         return self._compute_loss(model, inputs)
 
+    def _get_effective_rho(self) -> float:
+        step = int(self.state.global_step) if self.state is not None else 0
+        if self.rho_schedule is None:
+            return self.rho
+        return resolve_scheduled_rho(
+            step,
+            self.rho_schedule,
+            fallback_rho=self.rho,
+            rho_min=self.rho_min,
+            rho_ramp_steps=self.rho_ramp_steps,
+        )
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1709,15 +1777,17 @@ class DistilTrainer(BaseTrainer):
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
         
-        # build the target distribution q* from student p and teacher T for info-proximal SDFT
-        # rho=1.0 recovers vanilla SDFT (q* == T), and rho<1.0 transfers a controlled fraction of teacher info
-        log_q_star, lam_t, gamma_t, kl_T_p = compute_q_star_logps(
-            all_logps, teacher_all_logps, self.rho, n_iter=self.rho_bisection_iters,
+        rho_eff = self._get_effective_rho()
+        log_q_star, lam_t, gamma_t, kl_T_p = build_q_star_logps(
+            all_logps,
+            teacher_all_logps,
+            rho_eff,
+            n_iter=self.rho_bisection_iters,
         )
         # cast back to student dtype for the loss
         log_q_star = log_q_star.to(all_logps.dtype)
 
-        # KL target is q* (was teacher_all_logps in vanilla SDFT)
+        # kl target is q* (was teacher_all_logps in vanilla SDFT)
         if self.alpha == 0: # forward KL: KL(q* || p)
             kl_loss = kl_div(all_logps, log_q_star, reduction="none", log_target=True)
         elif self.alpha == 1: # reverse KL: KL(p || q*)
@@ -1747,7 +1817,37 @@ class DistilTrainer(BaseTrainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        loss = ((per_token_loss * loss_completion_mask).sum(-1) / loss_completion_mask.sum(-1).clamp(min=1.0)).mean()
+        distill_loss = (
+            (per_token_loss * loss_completion_mask).sum(-1) / loss_completion_mask.sum(-1).clamp(min=1.0)
+        ).mean()
+
+        anchor_loss = None
+        if self.anchor_mu > 0.0:
+            with torch.no_grad():
+                _, base_all_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.base_model,
+                    input_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    compute_entropy=False,
+                    pixel_values=inputs.get("pixel_values"),
+                    image_grid_thw=inputs.get("image_grid_thw"),
+                    num_images=inputs.get("num_images"),
+                    pixel_attention_mask=inputs.get("pixel_attention_mask"),
+                    image_sizes=inputs.get("image_sizes"),
+                    token_type_ids=inputs.get("token_type_ids"),
+                )
+            per_token_anchor_kl = kl_div(
+                all_logps, base_all_logps, reduction="none", log_target=True
+            ).sum(-1)
+            anchor_loss = (
+                (per_token_anchor_kl * loss_completion_mask).sum(-1)
+                / loss_completion_mask.sum(-1).clamp(min=1.0)
+            ).mean()
+
+        loss = distill_loss
+        if anchor_loss is not None:
+            loss = loss + self.anchor_mu * anchor_loss
         loss = loss / self.current_gradient_accumulation_steps
 
         # Log the metrics
@@ -1770,6 +1870,12 @@ class DistilTrainer(BaseTrainer):
             mean_kl = masked_batch_mean(per_token_kl)
             self._metrics[mode]["kl_to_base_model"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
+        if anchor_loss is not None:
+            self._metrics[mode]["anchor/mu"].append(float(self.anchor_mu))
+            self._metrics[mode]["anchor/kl_pbase_p"].append(
+                self.accelerator.gather(anchor_loss).nanmean().item()
+            )
+
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
@@ -1782,10 +1888,21 @@ class DistilTrainer(BaseTrainer):
             mean_gamma = masked_batch_mean(gamma_t)
             mean_kl_T_p = masked_batch_mean(kl_T_p)
             mean_kl_qstar_p = masked_batch_mean(kl_qstar_p)
+            info_under_q = (log_q_star_f.exp() * (teacher_all_logps.detach().float() - all_logps_f)).sum(-1)
+            mean_info_under_q = masked_batch_mean(info_under_q)
+            constraint_gap = info_under_q - gamma_t
+            mean_constraint_gap = masked_batch_mean(constraint_gap)
+        self._metrics[mode]["rho/value"].append(float(rho_eff))
         self._metrics[mode]["rho/lambda"].append(self.accelerator.gather(mean_lam).nanmean().item())
         self._metrics[mode]["rho/gamma"].append(self.accelerator.gather(mean_gamma).nanmean().item())
         self._metrics[mode]["rho/kl_T_p"].append(self.accelerator.gather(mean_kl_T_p).nanmean().item())
         self._metrics[mode]["rho/kl_qstar_p"].append(self.accelerator.gather(mean_kl_qstar_p).nanmean().item())
+        self._metrics[mode]["rho/info_under_q"].append(
+            self.accelerator.gather(mean_info_under_q).nanmean().item()
+        )
+        self._metrics[mode]["rho/constraint_gap"].append(
+            self.accelerator.gather(mean_constraint_gap).nanmean().item()
+        )
 
         return loss
 

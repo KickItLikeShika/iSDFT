@@ -620,15 +620,43 @@ class DistilConfig(TrainingArguments):
     rho: float = field(
         default=1.0,
         metadata={
-            "help": "Info-Proximal SDFT: fraction of local teacher information to transfer per token. "
+            "help": "Info-Proximal SDFT: information budget multiplier per token. "
             "The KL target is replaced by q* = argmin KL(q || p) s.t. E_q[log T/p] >= rho * KL(T || p). "
-            "rho=1.0 recovers vanilla SDFT (q* = T). rho<1.0 transfers a controlled fraction of teacher info."
+            "rho=1.0 recovers vanilla SDFT (q* = T). rho<1.0 transfers less"
+            "When rho_schedule is set, this value is used only after the schedule ends (e.g. ramp50 uses 1.0)."
+        },
+    )
+    rho_schedule: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Optional ρ schedule keyed on global_step. "
+            "linear: ramp from rho_min to rho over rho_ramp_steps. "
+            "ramp50 (legacy): ρ=0.5 (0–49), 0.75 (50–99), then rho."
+        },
+    )
+    rho_min: float = field(
+        default=0.25,
+        metadata={
+            "help": "Starting ρ for rho_schedule=linear (step 0). Ramps linearly to rho by rho_ramp_steps."
+        },
+    )
+    rho_ramp_steps: int = field(
+        default=200,
+        metadata={
+            "help": "For rho_schedule=linear: global_step at which ρ reaches rho (then stays there)."
         },
     )
     rho_bisection_iters: int = field(
         default=20,
         metadata={
             "help": "Number of bisection iterations used to solve for the Lagrange multiplier lambda when building q*."
+        },
+    )
+    anchor_mu: float = field(
+        default=0.0,
+        metadata={
+            "help": "Weight on KL(p_base || p_student) where p_base is the frozen initial checkpoint. "
+            "0 disables the anchor. Distillation loss KL(q* || p) is unchanged; this only penalizes drift from base."
         },
     )
     vllm_importance_sampling_correction: bool = field(
