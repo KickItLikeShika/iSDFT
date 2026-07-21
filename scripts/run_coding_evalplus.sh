@@ -1,12 +1,15 @@
-#!/bin/bash
-# EvalPlus: HumanEval + HumanEval+ and MBPP + MBPP+ (pass@1, greedy).
-# Usage: bash scripts/run_coding_evalplus.sh <model_path|hf_repo_id> [out_dir]
 set -euo pipefail
 
 MODEL=${1:?"usage: $0 <model_path|hf_repo_id> [out_dir]"}
 OUT_DIR=${2:-"./benchmark/coding_evalplus"}
 TP=${TP:-$(python3 -c "import torch; print(max(1, torch.cuda.device_count()))" 2>/dev/null || echo 1)}
-DTYPE=${DTYPE:-float32}
+DTYPE=${DTYPE:-bfloat16}
+export VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export EVALPLUS_MAX_NEW_TOKENS="${EVALPLUS_MAX_NEW_TOKENS:-4096}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "${SCRIPT_DIR}/patch_evalplus_vllm.py"
 
 if ! command -v evalplus.evaluate >/dev/null 2>&1; then
     echo "error: evalplus not found. Install with: pip install evalplus"
