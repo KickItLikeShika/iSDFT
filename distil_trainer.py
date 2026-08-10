@@ -441,6 +441,7 @@ class DistilTrainer(BaseTrainer):
         self.rho_ramp_steps = args.rho_ramp_steps
         self.rho_bisection_iters = args.rho_bisection_iters
         self.anchor_mu = args.anchor_mu
+        self.gradient_estimator = args.gradient_estimator
         self.base_model = base_model
         if self.anchor_mu > 0.0 and self.base_model is None:
             raise ValueError(
@@ -1817,11 +1818,13 @@ class DistilTrainer(BaseTrainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        distill_loss = (
+        # Keep one objective value per sampled trajectory for the sequence score term.
+        distill_per_sequence = (
             (per_token_loss * loss_completion_mask).sum(-1) / loss_completion_mask.sum(-1).clamp(min=1.0)
-        ).mean()
+        )
 
         anchor_loss = None
+        anchor_per_sequence = None
         if self.anchor_mu > 0.0:
             with torch.no_grad():
                 _, base_all_logps, _ = self._get_per_token_logps_and_entropies(
@@ -1840,14 +1843,25 @@ class DistilTrainer(BaseTrainer):
             per_token_anchor_kl = kl_div(
                 all_logps, base_all_logps, reduction="none", log_target=True
             ).sum(-1)
-            anchor_loss = (
+            anchor_per_sequence = (
                 (per_token_anchor_kl * loss_completion_mask).sum(-1)
                 / loss_completion_mask.sum(-1).clamp(min=1.0)
-            ).mean()
+            )
+            anchor_loss = anchor_per_sequence.mean()
 
-        loss = distill_loss
-        if anchor_loss is not None:
-            loss = loss + self.anchor_mu * anchor_loss
+        per_sequence_objective = distill_per_sequence
+        if anchor_per_sequence is not None:
+            per_sequence_objective = per_sequence_objective + self.anchor_mu * anchor_per_sequence
+
+        if self.gradient_estimator == "sequence_score":
+            # All sampled tokens affect the trajectory probability, including tokens skipped by the loss mask.
+            trajectory_logps = (per_token_logps * completion_mask).sum(-1)
+            # This surrogate is zero in the forward pass and adds L(y) * grad log pi(y|x).
+            zero_value_score = trajectory_logps - trajectory_logps.detach()
+            score_correction = (per_sequence_objective.detach() * zero_value_score).mean()
+            loss = per_sequence_objective.mean() + score_correction
+        else:
+            loss = per_sequence_objective.mean()
         loss = loss / self.current_gradient_accumulation_steps
 
         # Log the metrics

@@ -489,6 +489,14 @@ class DistilConfig(TrainingArguments):
             "help": "Alpha coefficient. If `0.0` (default), the forward KL is used. If `1.0`, the reverse KL is used. If anything in between, the Jensen-Shannon Divergence is used."
         },
     )
+    gradient_estimator: str = field(
+        default="analytic",
+        metadata={
+            "help": "Gradient estimator for the sequence objective. `analytic` keeps the existing per-token "
+            "semi-gradient; `sequence_score` adds the sequence score-function correction and is exact only for "
+            "on-policy completions."
+        },
+    )
     generate_from_teacher: bool = field(
         default=False,
         metadata={
@@ -701,6 +709,14 @@ class DistilConfig(TrainingArguments):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
+
+        if self.gradient_estimator not in {"analytic", "sequence_score"}:
+            raise ValueError(
+                "gradient_estimator must be one of {'analytic', 'sequence_score'}, "
+                f"got {self.gradient_estimator!r}."
+            )
+        if self.gradient_estimator == "sequence_score" and self.generate_from_teacher:
+            raise ValueError("sequence_score requires student-generated completions.")
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 

@@ -37,6 +37,12 @@ def parse_args():
     )
     parser.add_argument("--rho_bisection_iters", type=int, default=40, help="Bisection iterations for solving lambda in q*.")
     parser.add_argument(
+        "--gradient_estimator",
+        choices=["analytic", "sequence_score"],
+        default="analytic",
+        help="Use the existing analytic semi-gradient or add the on-policy sequence score-function correction.",
+    )
+    parser.add_argument(
         "--anchor_mu",
         type=float,
         default=2e-3,
@@ -168,6 +174,7 @@ if __name__ == "__main__":
         rho_ramp_steps = args.rho_ramp_steps,
         rho_bisection_iters = args.rho_bisection_iters,
         anchor_mu = args.anchor_mu,
+        gradient_estimator = args.gradient_estimator,
     )
     trainer = DistilTrainer(
         model=model,
