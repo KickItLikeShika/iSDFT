@@ -19,9 +19,9 @@ def parse_args():
     parser.add_argument(
         "--rho_schedule",
         type=str,
-        default=None,
-        choices=["linear", "ramp50", "piecewise_50_50"],
-        help="ρ schedule: linear (rho_min→rho over rho_ramp_steps) or legacy ramp50.",
+        default="linear",
+        choices=["linear", "ramp50"],
+        help="ρ schedule: linear (rho_min->rho over rho_ramp_steps) or ramp50.",
     )
     parser.add_argument(
         "--rho_min",
