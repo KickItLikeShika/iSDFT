@@ -96,4 +96,4 @@ For capability retention, evaluate the initial model and the specialised checkpo
 
 ## Acknowledgements
 
-Our implementation builds on [Self-Distillation Fine-Tuning](https://github.com/Continual-Intelligence/Self-Distillation) and [TRL](https://github.com/huggingface/trl). The Tool Use and Science data and task evaluation code come from the SDFT project.
+Our implementation builds on [Self-Distillation Fine-Tuning](https://github.com/idanshen/Self-Distillation) and [TRL](https://github.com/huggingface/trl). The Tool Use and Science data and task evaluation code come from the SDFT project.
