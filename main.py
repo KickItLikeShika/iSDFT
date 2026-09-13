@@ -11,7 +11,7 @@ import os
 def parse_args():
     parser = argparse.ArgumentParser(description="Distil Trainer")
     parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
-    parser.add_argument("--num_train_epochs", type=int, default=1, help="Number of training epochs")
+    parser.add_argument("--num_train_epochs", type=int, default=4, help="Number of training epochs")
     parser.add_argument("--max_steps", type=int, default=-1, help="If > 0, stop training after this many optimizer steps.")
     parser.add_argument("--num_prompts_per_batch", type=int, default=32, help="Number of prompts per batch")
     parser.add_argument("--ref_model_mixup_alpha", type=float, default=0.01, help="Reference model mixup alpha")
